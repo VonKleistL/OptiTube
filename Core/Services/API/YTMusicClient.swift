@@ -47,12 +47,6 @@ final class YTMusicClient: YTMusicClientProtocol {
     /// YouTube Music API base URL.
     private static let baseURL = "https://music.youtube.com/youtubei/v1"
 
-    /// API key used in requests (extracted from YouTube Music web client).
-    private static let apiKey = "YOUR_GOOGLE_API_KEY_HERE"
-
-    /// Client version for WEB_REMIX.
-    private static let clientVersion = "1.20231204.01.00"
-
     /// Centralized storage for continuation tokens keyed by content type.
     private var continuationTokens: [PaginatedContentType: String] = [:]
 
@@ -99,15 +93,16 @@ final class YTMusicClient: YTMusicClientProtocol {
 
         let hasMore = token != nil
         self.logger.info("\(type.displayName.capitalized) page loaded: \(response.sections.count) initial sections, hasMore: \(hasMore)")
-        
+
         // If we bypassed cache to fetch, ensure we update the cache with the fresh data
         if forceRefresh {
             let brandId = self.brandIdProvider?() ?? ""
-            let fullBodyWithContext = body.merging(["context": self.buildContext()]) { (_, new) in new }
+            let context = try await YouTubeWebContextService.shared.fetchContext(for: .music)
+            let fullBodyWithContext = body.merging(["context": self.buildContext(context)]) { (_, new) in new }
             let cacheKey = APICache.stableCacheKey(endpoint: "browse", body: fullBodyWithContext, brandId: brandId)
             APICache.shared.set(key: cacheKey, data: data, ttl: APICache.TTL.home)
         }
-        
+
         return response
     }
 
@@ -986,10 +981,10 @@ final class YTMusicClient: YTMusicClientProtocol {
     /// - Parameter brandId: The brand ID to switch to, or nil for primary account.
     func switchAccount(brandId: String?) async throws {
         self.logger.info("Switching API identity to: \(brandId ?? "primary")")
-        
+
         // Reset session state to prevent cross-account data leakage
         self.resetSessionStateForAccountSwitch()
-        
+
         // Clear cached responses to ensure we fetch fresh data for the new account
         APICache.shared.invalidateAll()
     }
@@ -1193,7 +1188,7 @@ final class YTMusicClient: YTMusicClientProtocol {
     // MARK: - Private Methods
 
     /// Builds authentication headers for API requests.
-    private func buildAuthHeaders() async throws -> [String: String] {
+    private func buildAuthHeaders(context: YouTubeWebContextService.YouTubeContext) async throws -> [String: String] {
         // Log available cookies for debugging auth issues
         let allCookies = await webKitManager.getAllCookies()
         let youtubeCookies = await webKitManager.getCookies(for: "youtube.com")
@@ -1219,7 +1214,7 @@ final class YTMusicClient: YTMusicClientProtocol {
 
         let sapisidhash = "\(timestamp)_\(hash)"
 
-        return [
+        var headers = [
             "Cookie": cookieHeader,
             "Authorization": "SAPISIDHASH \(sapisidhash)",
             "Origin": origin,
@@ -1228,11 +1223,15 @@ final class YTMusicClient: YTMusicClientProtocol {
             "X-Goog-AuthUser": "0",
             "X-Origin": origin,
         ]
+        if let visitorData = context.visitorData {
+            headers["X-Goog-Visitor-Id"] = visitorData
+        }
+        return headers
     }
 
     /// Builds the standard context payload.
     /// Includes `onBehalfOfUser` when a brand account is selected.
-    private func buildContext() -> [String: Any] {
+    private func buildContext(_ webContext: YouTubeWebContextService.YouTubeContext) -> [String: Any] {
         var userDict: [String: Any] = [
             "lockedSafetyMode": false,
         ]
@@ -1245,22 +1244,27 @@ final class YTMusicClient: YTMusicClientProtocol {
             self.logger.debug("Using primary account (no brand ID)")
         }
 
+        var client: [String: Any] = [
+            "clientName": webContext.clientName,
+            "clientVersion": webContext.clientVersion,
+            "hl": "en",
+            "gl": "US",
+            "experimentIds": [],
+            "experimentsToken": "",
+            "browserName": "Safari",
+            "browserVersion": "17.0",
+            "osName": "Macintosh",
+            "osVersion": "10_15_7",
+            "platform": "DESKTOP",
+            "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+            "utcOffsetMinutes": -TimeZone.current.secondsFromGMT() / 60,
+        ]
+        if let visitorData = webContext.visitorData {
+            client["visitorData"] = visitorData
+        }
+
         return [
-            "client": [
-                "clientName": "WEB_REMIX",
-                "clientVersion": Self.clientVersion,
-                "hl": "en",
-                "gl": "US",
-                "experimentIds": [],
-                "experimentsToken": "",
-                "browserName": "Safari",
-                "browserVersion": "17.0",
-                "osName": "Macintosh",
-                "osVersion": "10_15_7",
-                "platform": "DESKTOP",
-                "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
-                "utcOffsetMinutes": -TimeZone.current.secondsFromGMT() / 60,
-            ],
+            "client": client,
             "user": userDict,
         ]
     }
@@ -1268,8 +1272,9 @@ final class YTMusicClient: YTMusicClientProtocol {
     /// Makes an authenticated request to the API with optional caching and retry.
     private func request(_ endpoint: String, body: [String: Any], ttl: TimeInterval? = nil) async throws -> [String: Any] {
         // Build request body with context so cache keys reflect the actual request
+        let context = try await YouTubeWebContextService.shared.fetchContext(for: .music)
         var fullBody = body
-        fullBody["context"] = self.buildContext()
+        fullBody["context"] = self.buildContext(context)
 
         // Generate stable cache key from endpoint, full body, and brand account ID
         // Brand ID must be in cache key to prevent returning cached data from other accounts
@@ -1287,7 +1292,7 @@ final class YTMusicClient: YTMusicClientProtocol {
 
         // Execute with retry policy
         let json = try await RetryPolicy.default.execute { [self] in
-            try await self.performRequest(endpoint, fullBody: fullBody)
+            try await self.performRequest(endpoint, body: body, context: context, retryOnInvalidContext: true)
         }
 
         // Cache response if TTL specified
@@ -1299,10 +1304,16 @@ final class YTMusicClient: YTMusicClientProtocol {
     }
 
     /// Performs the actual network request.
-    private func performRequest(_ endpoint: String, fullBody: [String: Any]) async throws -> [String:
-        Any]
-    {
-        let urlString = "\(Self.baseURL)/\(endpoint)?key=\(Self.apiKey)&prettyPrint=false"
+    private func performRequest(
+        _ endpoint: String,
+        body: [String: Any],
+        context: YouTubeWebContextService.YouTubeContext,
+        retryOnInvalidContext: Bool
+    ) async throws -> [String: Any] {
+        var fullBody = body
+        fullBody["context"] = self.buildContext(context)
+
+        let urlString = "\(Self.baseURL)/\(endpoint)?key=\(context.apiKey)&prettyPrint=false"
         guard let url = URL(string: urlString) else {
             throw YTMusicError.unknown(message: "Invalid URL: \(urlString)")
         }
@@ -1311,7 +1322,7 @@ final class YTMusicClient: YTMusicClientProtocol {
         request.httpMethod = "POST"
 
         // Add auth headers
-        let headers = try await self.buildAuthHeaders()
+        let headers = try await self.buildAuthHeaders(context: context)
         for (key, value) in headers {
             request.setValue(value, forHTTPHeaderField: key)
         }
@@ -1347,6 +1358,17 @@ final class YTMusicClient: YTMusicClientProtocol {
             self.authService.sessionExpired()
             throw YTMusicError.authExpired
         case let .httpError(statusCode):
+            if statusCode == 400, retryOnInvalidContext {
+                self.logger.warning("YTMusicClient: HTTP 400, invalidating context and retrying once")
+                YouTubeWebContextService.shared.invalidateContext(for: .music)
+                let refreshedContext = try await YouTubeWebContextService.shared.fetchContext(for: .music)
+                return try await self.performRequest(
+                    endpoint,
+                    body: body,
+                    context: refreshedContext,
+                    retryOnInvalidContext: false
+                )
+            }
             self.logger.error("API error: HTTP \(statusCode)")
             throw YTMusicError.apiError(
                 message: "HTTP \(statusCode)",

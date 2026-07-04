@@ -38,7 +38,7 @@ import Foundation
 
 // MARK: - Configuration
 
-var apiKey = "YOUR_GOOGLE_API_KEY_HERE"
+var apiKey = ProcessInfo.processInfo.environment["OPTITUBE_INNERTUBE_API_KEY"] ?? ""
 var clientVersion = "1.20231204.01.00"
 var baseURL = "https://music.youtube.com/youtubei/v1"
 var origin = "https://music.youtube.com"
@@ -1160,7 +1160,8 @@ func showHelp() {
 }
 
 func fetchLiveYouTubeConfig() async -> (apiKey: String, clientVersion: String)? {
-    guard let url = URL(string: "https://www.youtube.com") else { return nil }
+    let configURL = isYouTubeMode ? "https://www.youtube.com" : "https://music.youtube.com"
+    guard let url = URL(string: configURL) else { return nil }
     var request = URLRequest(url: url)
     request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15", forHTTPHeaderField: "User-Agent")
 
@@ -1240,12 +1241,6 @@ func runMain() async {
         baseURL = "https://www.youtube.com/youtubei/v1"
         origin = "https://www.youtube.com"
         clientName = "WEB"
-        guard let config = await fetchLiveYouTubeConfig() else {
-            print(" Unable to load live YouTube configuration")
-            return
-        }
-        apiKey = config.apiKey
-        clientVersion = config.clientVersion
     }
 
     for arg in args {
@@ -1265,6 +1260,16 @@ func runMain() async {
 
     guard let command = filteredArgs.first else {
         showHelp()
+        return
+    }
+
+    if apiKey.isEmpty, let config = await fetchLiveYouTubeConfig() {
+        apiKey = config.apiKey
+        clientVersion = config.clientVersion
+    }
+
+    if apiKey.isEmpty, !["help", "list", "auth"].contains(command) {
+        print(" Set OPTITUBE_INNERTUBE_API_KEY or enable live YouTube config extraction.")
         return
     }
 

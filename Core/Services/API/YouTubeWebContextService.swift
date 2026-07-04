@@ -11,7 +11,27 @@ final class YouTubeWebContextService: NSObject, WKNavigationDelegate {
     private let webView: WKWebView
     private let logger = DiagnosticsLogger.api
 
-    private var contextTask: Task<YouTubeContext, Error>?
+    private var youtubeContextTask: Task<YouTubeContext, Error>?
+    private var musicContextTask: Task<YouTubeContext, Error>?
+
+    enum ContextTarget: Sendable {
+        case youtube
+        case music
+
+        var urlString: String {
+            switch self {
+            case .youtube: "https://www.youtube.com"
+            case .music: "https://music.youtube.com"
+            }
+        }
+
+        var defaultClientName: String {
+            switch self {
+            case .youtube: "WEB"
+            case .music: "WEB_REMIX"
+            }
+        }
+    }
 
     struct YouTubeContext: Sendable {
         let apiKey: String
@@ -33,43 +53,57 @@ final class YouTubeWebContextService: NSObject, WKNavigationDelegate {
     }
 
     /// Fetches the live YouTube context. Caches it after the first successful fetch.
-    func fetchContext() async throws -> YouTubeContext {
-        if let task = self.contextTask {
+    func fetchContext(for target: ContextTarget = .youtube) async throws -> YouTubeContext {
+        if let task = self.contextTask(for: target) {
             return try await task.value
         }
 
         let task = Task { @MainActor in
-            try await self.performContextFetch()
+            try await self.performContextFetch(for: target)
         }
-        self.contextTask = task
+        self.setContextTask(task, for: target)
 
         do {
             return try await task.value
         } catch {
-            self.contextTask = nil
+            self.setContextTask(nil, for: target)
             throw error
         }
     }
 
     /// Invalidates the current context, forcing a refetch on the next request.
-    func invalidateContext() {
-        self.contextTask = nil
+    func invalidateContext(for target: ContextTarget = .youtube) {
+        self.setContextTask(nil, for: target)
     }
 
-    private func performContextFetch() async throws -> YouTubeContext {
+    private func contextTask(for target: ContextTarget) -> Task<YouTubeContext, Error>? {
+        switch target {
+        case .youtube: self.youtubeContextTask
+        case .music: self.musicContextTask
+        }
+    }
+
+    private func setContextTask(_ task: Task<YouTubeContext, Error>?, for target: ContextTarget) {
+        switch target {
+        case .youtube: self.youtubeContextTask = task
+        case .music: self.musicContextTask = task
+        }
+    }
+
+    private func performContextFetch(for target: ContextTarget) async throws -> YouTubeContext {
         self.logger.info("Fetching live YouTube web context...")
 
+        guard let url = URL(string: target.urlString) else {
+            throw YTMusicError.unknown(message: "Invalid YouTube context URL")
+        }
+
         // 1. Try URLSession first (fast, reliable, does not block MainActor webView loops)
-        if let context = await self.fetchLiveConfigViaSession() {
+        if let context = await self.fetchLiveConfigViaSession(for: target) {
             return context
         }
 
         // 2. Fall back to WebView extraction if URLSession failed
         self.logger.info("Falling back to WebView extraction for context...")
-        guard let url = URL(string: "https://www.youtube.com") else {
-            throw YTMusicError.unknown(message: "Invalid URL")
-        }
-
         self.webView.load(URLRequest(url: url))
 
         // Wait for ytcfg to become available (poll for up to 10 seconds)
@@ -77,7 +111,7 @@ final class YouTubeWebContextService: NSObject, WKNavigationDelegate {
         while Date().timeIntervalSince(startTime) < 10.0 {
             do {
                 if try await self.checkIfYtcfgReady() {
-                    return try await self.extractContext()
+                    return try await self.extractContext(for: target)
                 }
             } catch {
                 // Ignore and retry
@@ -88,8 +122,8 @@ final class YouTubeWebContextService: NSObject, WKNavigationDelegate {
         throw YTMusicError.unknown(message: "Unable to load live YouTube configuration")
     }
 
-    private func fetchLiveConfigViaSession() async -> YouTubeContext? {
-        guard let url = URL(string: "https://www.youtube.com") else { return nil }
+    private func fetchLiveConfigViaSession(for target: ContextTarget) async -> YouTubeContext? {
+        guard let url = URL(string: target.urlString) else { return nil }
         var request = URLRequest(url: url)
         request.setValue(WebKitManager.userAgent, forHTTPHeaderField: "User-Agent")
 
@@ -128,11 +162,11 @@ final class YouTubeWebContextService: NSObject, WKNavigationDelegate {
                 visitorData = String(html[r3])
             }
 
-            self.logger.info("Successfully extracted live YouTube config via URLSession (Client: WEB v\(extractedVersion))")
+            self.logger.info("Successfully extracted live YouTube config via URLSession (Client: \(target.defaultClientName) v\(extractedVersion))")
 
             return YouTubeContext(
                 apiKey: extractedKey,
-                clientName: "WEB",
+                clientName: target.defaultClientName,
                 clientVersion: extractedVersion,
                 visitorData: visitorData
             )
@@ -147,7 +181,7 @@ final class YouTubeWebContextService: NSObject, WKNavigationDelegate {
         return (result as? Bool) == true
     }
 
-    private func extractContext() async throws -> YouTubeContext {
+    private func extractContext(for target: ContextTarget) async throws -> YouTubeContext {
         let script = """
         (function() {
             return {
@@ -165,14 +199,13 @@ final class YouTubeWebContextService: NSObject, WKNavigationDelegate {
             throw YTMusicError.unknown(message: "Failed to extract ytcfg values")
         }
 
-        let clientName = result["clientName"] as? String ?? "WEB"
         let visitorData = result["visitorData"] as? String
 
-        self.logger.info("Successfully extracted YouTube context (Client: \(clientName) v\(clientVersion))")
+        self.logger.info("Successfully extracted YouTube context (Client: \(target.defaultClientName) v\(clientVersion))")
 
         return YouTubeContext(
             apiKey: apiKey,
-            clientName: clientName,
+            clientName: target.defaultClientName,
             clientVersion: clientVersion,
             visitorData: visitorData
         )

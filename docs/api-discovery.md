@@ -27,12 +27,14 @@
 
 ## Overview
 
-The YouTube Music API (`youtubei/v1`) is an internal API used by the YouTube Music web client. Key characteristics:
+The YouTube Music API (`youtubei/v1`) is an internal API used by the YouTube Music web client. Normal OptiTube use requires no user-supplied Google API key. Users sign in through the app; runtime requests use live YouTube Music web context and existing authenticated cookies. The developer-only API Explorer extracts live config when possible, or accepts `OPTITUBE_INNERTUBE_API_KEY` from the local environment.
+
+Key characteristics:
 
 | Property | Value |
 |----------|-------|
 | Base URL | `https://music.youtube.com/youtubei/v1` |
-| API Key | `YOUR_GOOGLE_API_KEY_HERE` |
+| API Key | Extracted at runtime from live YouTube Music web context |
 | Client Name | `WEB_REMIX` |
 | Client Version | `1.20231204.01.00` |
 | Protocol | HTTPS POST with JSON body |

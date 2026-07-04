@@ -33,6 +33,14 @@ struct WebKitManagerTests {
         #expect(WebKitManager.origin == "https://music.youtube.com")
     }
 
+    @Test("Web context targets preserve API surfaces")
+    func webContextTargets() {
+        #expect(YouTubeWebContextService.ContextTarget.youtube.urlString == "https://www.youtube.com")
+        #expect(YouTubeWebContextService.ContextTarget.youtube.defaultClientName == "WEB")
+        #expect(YouTubeWebContextService.ContextTarget.music.urlString == "https://music.youtube.com")
+        #expect(YouTubeWebContextService.ContextTarget.music.defaultClientName == "WEB_REMIX")
+    }
+
     @Test("Auth cookie name")
     func authCookieName() {
         #expect(WebKitManager.authCookieName == "__Secure-3PAPISID")
