@@ -1291,8 +1291,13 @@ final class YTMusicClient: YTMusicClientProtocol {
         }
 
         // Execute with retry policy
+        let requestContext = RequestContext(
+            body: body,
+            webContext: context,
+            canRefreshWebContext: true
+        )
         let json = try await RetryPolicy.default.execute { [self] in
-            try await self.performRequest(endpoint, body: body, context: context, retryOnInvalidContext: true)
+            try await self.performRequest(endpoint, requestContext: requestContext)
         }
 
         // Cache response if TTL specified
@@ -1306,14 +1311,12 @@ final class YTMusicClient: YTMusicClientProtocol {
     /// Performs the actual network request.
     private func performRequest(
         _ endpoint: String,
-        body: [String: Any],
-        context: YouTubeWebContextService.YouTubeContext,
-        retryOnInvalidContext: Bool
+        requestContext: RequestContext
     ) async throws -> [String: Any] {
-        var fullBody = body
-        fullBody["context"] = self.buildContext(context)
+        var fullBody = requestContext.body
+        fullBody["context"] = self.buildContext(requestContext.webContext)
 
-        let urlString = "\(Self.baseURL)/\(endpoint)?key=\(context.apiKey)&prettyPrint=false"
+        let urlString = "\(Self.baseURL)/\(endpoint)?key=\(requestContext.webContext.apiKey)&prettyPrint=false"
         guard let url = URL(string: urlString) else {
             throw YTMusicError.unknown(message: "Invalid URL: \(urlString)")
         }
@@ -1322,7 +1325,7 @@ final class YTMusicClient: YTMusicClientProtocol {
         request.httpMethod = "POST"
 
         // Add auth headers
-        let headers = try await self.buildAuthHeaders(context: context)
+        let headers = try await self.buildAuthHeaders(context: requestContext.webContext)
         for (key, value) in headers {
             request.setValue(value, forHTTPHeaderField: key)
         }
@@ -1358,15 +1361,17 @@ final class YTMusicClient: YTMusicClientProtocol {
             self.authService.sessionExpired()
             throw YTMusicError.authExpired
         case let .httpError(statusCode):
-            if statusCode == 400, retryOnInvalidContext {
+            if statusCode == 400, requestContext.canRefreshWebContext {
                 self.logger.warning("YTMusicClient: HTTP 400, invalidating context and retrying once")
                 YouTubeWebContextService.shared.invalidateContext(for: .music)
                 let refreshedContext = try await YouTubeWebContextService.shared.fetchContext(for: .music)
                 return try await self.performRequest(
                     endpoint,
-                    body: body,
-                    context: refreshedContext,
-                    retryOnInvalidContext: false
+                    requestContext: RequestContext(
+                        body: requestContext.body,
+                        webContext: refreshedContext,
+                        canRefreshWebContext: false
+                    )
                 )
             }
             self.logger.error("API error: HTTP \(statusCode)")
@@ -1380,6 +1385,12 @@ final class YTMusicClient: YTMusicClientProtocol {
     }
 
     // MARK: - Nonisolated Network Helper
+
+    private struct RequestContext {
+        let body: [String: Any]
+        let webContext: YouTubeWebContextService.YouTubeContext
+        let canRefreshWebContext: Bool
+    }
 
     /// Result type for network request to avoid throwing across actor boundaries.
     /// Uses Data (which is Sendable) instead of parsed JSON.

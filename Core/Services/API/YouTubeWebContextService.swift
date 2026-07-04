@@ -200,7 +200,6 @@ final class YouTubeWebContextService: NSObject, WKNavigationDelegate {
         }
 
         let visitorData = result["visitorData"] as? String
-
         self.logger.info("Successfully extracted YouTube context (Client: \(target.defaultClientName) v\(clientVersion))")
 
         return YouTubeContext(
