@@ -1,0 +1,157 @@
+import Foundation
+import Observation
+import os
+
+/// View model for the Library view.
+@MainActor
+@Observable
+final class LibraryViewModel {
+    /// Current loading state.
+    private(set) var loadingState: LoadingState = .idle
+
+    /// User's playlists.
+    private(set) var playlists: [Playlist] = []
+
+    /// User's subscribed podcast shows.
+    private(set) var podcastShows: [PodcastShow] = []
+
+    /// Set of playlist IDs that are in the user's library (for quick lookup).
+    private(set) var libraryPlaylistIds: Set<String> = []
+
+    /// Set of podcast show IDs that are in the user's library (for quick lookup).
+    private(set) var libraryPodcastIds: Set<String> = []
+
+    /// Selected playlist detail.
+    private(set) var selectedPlaylistDetail: PlaylistDetail?
+
+    /// Loading state for playlist detail.
+    private(set) var playlistDetailLoadingState: LoadingState = .idle
+
+    /// The API client (exposed for navigation to detail views).
+    let client: any YTMusicClientProtocol
+    private let logger = DiagnosticsLogger.api
+
+    init(client: any YTMusicClientProtocol) {
+        self.client = client
+    }
+
+    /// Checks if a playlist is in the user's library.
+    func isInLibrary(playlistId: String) -> Bool {
+        // Normalize the ID for comparison (remove VL prefix if present)
+        let normalizedId = playlistId.hasPrefix("VL") ? String(playlistId.dropFirst(2)) : playlistId
+        return self.libraryPlaylistIds.contains { storedId in
+            let normalizedStoredId = storedId.hasPrefix("VL") ? String(storedId.dropFirst(2)) : storedId
+            return normalizedId == normalizedStoredId || playlistId == storedId
+        }
+    }
+
+    /// Checks if a podcast show is in the user's library.
+    func isInLibrary(podcastId: String) -> Bool {
+        self.libraryPodcastIds.contains(podcastId)
+    }
+
+    /// Adds a playlist ID to the library set (called after successful add to library).
+    func addToLibrarySet(playlistId: String) {
+        self.libraryPlaylistIds.insert(playlistId)
+    }
+
+    /// Adds a podcast to the library (called after successful subscription).
+    /// Updates both the ID set and the shows array for immediate UI update.
+    func addToLibrary(podcast: PodcastShow) {
+        self.libraryPodcastIds.insert(podcast.id)
+        // Add to shows array if not already present
+        if !self.podcastShows.contains(where: { $0.id == podcast.id }) {
+            self.podcastShows.insert(podcast, at: 0)
+        }
+    }
+
+    /// Adds a podcast ID to the library set (called after successful subscription).
+    func addToLibrarySet(podcastId: String) {
+        self.libraryPodcastIds.insert(podcastId)
+    }
+
+    /// Removes a playlist ID from the library set (called after successful remove from library).
+    func removeFromLibrarySet(playlistId: String) {
+        // Remove both the exact ID and normalized versions
+        self.libraryPlaylistIds.remove(playlistId)
+        let normalizedId = playlistId.hasPrefix("VL") ? String(playlistId.dropFirst(2)) : playlistId
+        self.libraryPlaylistIds = self.libraryPlaylistIds.filter { storedId in
+            let normalizedStoredId = storedId.hasPrefix("VL") ? String(storedId.dropFirst(2)) : storedId
+            return normalizedId != normalizedStoredId
+        }
+    }
+
+    /// Removes a podcast from the library (called after successful unsubscribe).
+    /// Updates both the ID set and the shows array for immediate UI update.
+    func removeFromLibrary(podcastId: String) {
+        self.libraryPodcastIds.remove(podcastId)
+        self.podcastShows.removeAll { $0.id == podcastId }
+    }
+
+    /// Removes a podcast ID from the library set (called after successful unsubscribe).
+    func removeFromLibrarySet(podcastId: String) {
+        self.libraryPodcastIds.remove(podcastId)
+    }
+
+    /// Loads library content (playlists and podcasts).
+    func load() async {
+        guard self.loadingState != .loading else { return }
+
+        self.loadingState = .loading
+        self.logger.info("Loading library content")
+
+        do {
+            let content = try await client.getLibraryContent()
+            self.playlists = content.playlists
+            self.podcastShows = content.podcastShows
+            // Update the sets for quick lookup
+            self.libraryPlaylistIds = Set(content.playlists.map(\.id))
+            self.libraryPodcastIds = Set(content.podcastShows.map(\.id))
+            self.loadingState = .loaded
+            self.logger.info("Loaded \(content.playlists.count) playlists and \(content.podcastShows.count) podcasts")
+        } catch is CancellationError {
+            // Task was cancelled (e.g., user navigated away) — reset to idle so it can retry
+            self.logger.debug("Library load cancelled")
+            self.loadingState = .idle
+        } catch {
+            self.logger.error("Failed to load library: \(error.localizedDescription)")
+            self.loadingState = .error(LoadingError(from: error))
+        }
+    }
+
+    /// Loads a specific playlist's details.
+    func loadPlaylist(id: String) async {
+        guard self.playlistDetailLoadingState != .loading else { return }
+
+        self.playlistDetailLoadingState = .loading
+        self.logger.info("Loading playlist: \(id)")
+
+        do {
+            let response = try await client.getPlaylist(id: id)
+            self.selectedPlaylistDetail = response.detail
+            self.playlistDetailLoadingState = .loaded
+            let trackCount = response.detail.tracks.count
+            self.logger.info("Loaded playlist with \(trackCount) tracks")
+        } catch is CancellationError {
+            // Task was cancelled (e.g., user navigated away) — reset to idle so it can retry
+            self.logger.debug("Playlist load cancelled")
+            self.playlistDetailLoadingState = .idle
+        } catch {
+            self.logger.error("Failed to load playlist: \(error.localizedDescription)")
+            self.playlistDetailLoadingState = .error(LoadingError(from: error))
+        }
+    }
+
+    /// Clears the selected playlist.
+    func clearSelectedPlaylist() {
+        self.selectedPlaylistDetail = nil
+        self.playlistDetailLoadingState = .idle
+    }
+
+    /// Refreshes library content.
+    func refresh() async {
+        self.playlists = []
+        self.podcastShows = []
+        await self.load()
+    }
+}

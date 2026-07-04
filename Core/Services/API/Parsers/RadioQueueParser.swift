@@ -1,0 +1,185 @@
+import Foundation
+
+// MARK: - RadioQueueResult
+
+/// Result from parsing a radio queue, including tracks and continuation token.
+struct RadioQueueResult {
+    let tracks: [Track]
+    /// Continuation token for fetching more tracks (infinite mix).
+    let continuationToken: String?
+}
+
+// MARK: - RadioQueueParser
+
+/// Parses radio queue responses from YouTube Music API.
+enum RadioQueueParser {
+    private static let logger = DiagnosticsLogger.api
+
+    /// Parses the radio queue from the "next" endpoint response.
+    /// - Parameter data: The response from the "next" endpoint with a radio playlist ID
+    /// - Returns: RadioQueueResult containing tracks and optional continuation token
+    static func parse(from data: [String: Any]) -> RadioQueueResult {
+        guard let contents = data["contents"] as? [String: Any],
+              let watchNextRenderer = contents["singleColumnMusicWatchNextResultsRenderer"] as? [String: Any],
+              let tabbedRenderer = watchNextRenderer["tabbedRenderer"] as? [String: Any],
+              let watchNextTabbedResults = tabbedRenderer["watchNextTabbedResultsRenderer"] as? [String: Any],
+              let tabs = watchNextTabbedResults["tabs"] as? [[String: Any]],
+              let firstTab = tabs.first,
+              let tabRenderer = firstTab["tabRenderer"] as? [String: Any],
+              let tabContent = tabRenderer["content"] as? [String: Any],
+              let musicQueueRenderer = tabContent["musicQueueRenderer"] as? [String: Any],
+              let queueContent = musicQueueRenderer["content"] as? [String: Any],
+              let playlistPanelRenderer = queueContent["playlistPanelRenderer"] as? [String: Any],
+              let playlistContents = playlistPanelRenderer["contents"] as? [[String: Any]]
+        else {
+            self.logger.debug("RadioQueueParser: Failed to parse radio queue structure. Top keys: \(data.keys.sorted())")
+            return RadioQueueResult(tracks: [], continuationToken: nil)
+        }
+
+        // Extract continuation token for infinite mix
+        var continuationToken: String?
+        if let continuations = playlistPanelRenderer["continuations"] as? [[String: Any]],
+           let firstContinuation = continuations.first,
+           let nextRadioData = firstContinuation["nextRadioContinuationData"] as? [String: Any],
+           let token = nextRadioData["continuation"] as? String
+        {
+            continuationToken = token
+        }
+
+        let tracks = Self.parseTracks(from: playlistContents)
+        return RadioQueueResult(tracks: tracks, continuationToken: continuationToken)
+    }
+
+    /// Parses a continuation response for more queue items.
+    /// - Parameter data: The continuation response
+    /// - Returns: RadioQueueResult with additional tracks and next continuation token
+    static func parseContinuation(from data: [String: Any]) -> RadioQueueResult {
+        guard let continuationContents = data["continuationContents"] as? [String: Any],
+              let playlistPanelContinuation = continuationContents["playlistPanelContinuation"] as? [String: Any],
+              let contents = playlistPanelContinuation["contents"] as? [[String: Any]]
+        else {
+            return RadioQueueResult(tracks: [], continuationToken: nil)
+        }
+
+        // Extract next continuation token
+        var continuationToken: String?
+        if let continuations = playlistPanelContinuation["continuations"] as? [[String: Any]],
+           let firstContinuation = continuations.first,
+           let nextRadioData = firstContinuation["nextRadioContinuationData"] as? [String: Any],
+           let token = nextRadioData["continuation"] as? String
+        {
+            continuationToken = token
+        }
+
+        let tracks = Self.parseTracks(from: contents)
+        return RadioQueueResult(tracks: tracks, continuationToken: continuationToken)
+    }
+
+    /// Parses tracks from playlist panel contents.
+    private static func parseTracks(from playlistContents: [[String: Any]]) -> [Track] {
+        var tracks: [Track] = []
+        for item in playlistContents {
+            // Handle both direct and wrapped renderer structures
+            // Direct: item.playlistPanelVideoRenderer
+            // Wrapped: item.playlistPanelVideoWrapperRenderer.primaryRenderer.playlistPanelVideoRenderer
+            let panelVideoRenderer: [String: Any]? = if let direct = item["playlistPanelVideoRenderer"] as? [String: Any] {
+                direct
+            } else if let wrapper = item["playlistPanelVideoWrapperRenderer"] as? [String: Any],
+                      let primary = wrapper["primaryRenderer"] as? [String: Any],
+                      let wrapped = primary["playlistPanelVideoRenderer"] as? [String: Any]
+            {
+                wrapped
+            } else {
+                nil
+            }
+
+            guard let panelVideoRenderer else {
+                continue
+            }
+
+            // Extract videoId - required field
+            guard let videoId = panelVideoRenderer["videoId"] as? String else {
+                continue
+            }
+
+            let title = self.parseTitle(from: panelVideoRenderer)
+            let artists = self.parseArtists(from: panelVideoRenderer)
+            let thumbnailURL = self.parseThumbnail(from: panelVideoRenderer)
+            let duration = self.parseDuration(from: panelVideoRenderer)
+
+            let track = Track(
+                id: videoId,
+                title: title,
+                artists: artists,
+                album: nil,
+                duration: duration,
+                thumbnailURL: thumbnailURL,
+                videoId: videoId
+            )
+            tracks.append(track)
+        }
+
+        return tracks
+    }
+
+    /// Parses the track title from the panel video renderer.
+    private static func parseTitle(from renderer: [String: Any]) -> String {
+        if let titleData = renderer["title"] as? [String: Any],
+           let runs = titleData["runs"] as? [[String: Any]],
+           let firstRun = runs.first,
+           let text = firstRun["text"] as? String
+        {
+            return text
+        }
+        return "Unknown"
+    }
+
+    /// Parses artists from the panel video renderer's longBylineText.
+    private static func parseArtists(from renderer: [String: Any]) -> [Artist] {
+        var artists: [Artist] = []
+        guard let bylineData = renderer["longBylineText"] as? [String: Any],
+              let runs = bylineData["runs"] as? [[String: Any]]
+        else { return artists }
+
+        for run in runs {
+            guard let text = run["text"] as? String,
+                  text != " • ", text != " & ", text != ", ", text != " · "
+            else { continue }
+
+            let artistId: String = if let navEndpoint = run["navigationEndpoint"] as? [String: Any],
+                                      let browseEndpoint = navEndpoint["browseEndpoint"] as? [String: Any],
+                                      let browseId = browseEndpoint["browseId"] as? String
+            {
+                browseId
+            } else {
+                // Generate stable ID from artist name when no browse ID available
+                ParsingHelpers.stableId(title: "artist", components: text)
+            }
+            artists.append(Artist(id: artistId, name: text))
+        }
+        return artists
+    }
+
+    /// Parses the thumbnail URL from the panel video renderer.
+    private static func parseThumbnail(from renderer: [String: Any]) -> URL? {
+        guard let thumbnail = renderer["thumbnail"] as? [String: Any],
+              let thumbnails = thumbnail["thumbnails"] as? [[String: Any]],
+              let lastThumb = thumbnails.last,
+              let urlString = lastThumb["url"] as? String
+        else { return nil }
+
+        let normalizedURL = urlString.hasPrefix("//") ? "https:" + urlString : urlString
+        return URL(string: normalizedURL)
+    }
+
+    /// Parses the duration from the panel video renderer.
+    private static func parseDuration(from renderer: [String: Any]) -> TimeInterval? {
+        guard let lengthText = renderer["lengthText"] as? [String: Any],
+              let runs = lengthText["runs"] as? [[String: Any]],
+              let firstRun = runs.first,
+              let text = firstRun["text"] as? String
+        else { return nil }
+
+        return ParsingHelpers.parseDuration(text)
+    }
+}

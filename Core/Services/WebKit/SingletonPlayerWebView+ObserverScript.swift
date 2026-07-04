@@ -1,0 +1,322 @@
+// MARK: - SingletonPlayerWebView Observer Script Extension
+
+extension SingletonPlayerWebView {
+    /// Observer script for playback state.
+    static var observerScript: String {
+        """
+        (function() {
+            'use strict';
+            const bridge = window.webkit.messageHandlers.singletonPlayer;
+            let lastTitle = '';
+            let lastArtist = '';
+            let lastVideoId = '';
+            let isPollingActive = false;
+            let pollIntervalId = null;
+            let lastUpdateTime = 0;
+            const UPDATE_THROTTLE_MS = 500;
+            const POLL_INTERVAL_MS = 1000;
+
+            let isEnforcingVolume = false;
+
+            function enforceVolumeNow() {
+                const targetVol = window.__optitubeTargetVolume;
+                const v = document.querySelector('video');
+                if (!v || typeof targetVol !== 'number' || Math.abs(v.volume - targetVol) <= 0.01) return;
+                isEnforcingVolume = true;
+                v.volume = targetVol;
+                const ytVol = Math.round(targetVol * 100);
+                const p = document.querySelector('ytmusic-player');
+                if (p && p.playerApi) p.playerApi.setVolume(ytVol);
+                const mp = document.getElementById('movie_player');
+                if (mp && mp.setVolume) mp.setVolume(ytVol);
+                setTimeout(() => { isEnforcingVolume = false; }, 50);
+            }
+
+            function waitForPlayerBar() {
+                const playerBar = document.querySelector('ytmusic-player-bar');
+                if (playerBar) {
+                    setupObserver(playerBar);
+                    setupVideoListeners();
+                    return;
+                }
+                setTimeout(waitForPlayerBar, 500);
+            }
+
+            function setupVideoListeners() {
+                function attachVideoListeners() {
+                    const video = document.querySelector('video');
+                    if (!video) {
+                        setTimeout(attachVideoListeners, 500);
+                        return;
+                    }
+                    if (video.__optitubeListenersAttached) return;
+                    video.__optitubeListenersAttached = true;
+
+                    video.addEventListener('play', startPolling);
+                    video.addEventListener('playing', startPolling);
+                    video.addEventListener('playing', () => enforceVolumeNow());
+                    video.addEventListener('pause', stopPolling);
+                    video.addEventListener('ended', () => {
+                        sendTrackEnded();
+                        stopPolling();
+                    });
+                    video.addEventListener('waiting', () => sendUpdate());
+                    video.addEventListener('seeked', () => sendUpdate());
+
+                    video.addEventListener('webkitcurrentplaybacktargetiswirelesschanged', () => {
+                        const isWireless = video.webkitCurrentPlaybackTargetIsWireless;
+                        const wasConnected = window.__optitubeAirPlayConnected;
+                        window.__optitubeAirPlayConnected = isWireless;
+
+                        bridge.postMessage({
+                            type: 'AIRPLAY_STATUS',
+                            isConnected: isWireless,
+                            wasConnected: wasConnected,
+                            wasRequested: window.__optitubeAirPlayRequested || false
+                        });
+                    });
+
+                    const initialWireless = video.webkitCurrentPlaybackTargetIsWireless;
+                    if (initialWireless) {
+                        window.__optitubeAirPlayConnected = true;
+                        bridge.postMessage({
+                            type: 'AIRPLAY_STATUS',
+                            isConnected: true,
+                            wasConnected: false,
+                            wasRequested: window.__optitubeAirPlayRequested || false
+                        });
+                    } else if (window.__optitubeAirPlayRequested && window.__optitubeAirPlayConnected) {
+                        window.__optitubeAirPlayConnected = false;
+                        bridge.postMessage({
+                            type: 'AIRPLAY_STATUS',
+                            isConnected: false,
+                            wasConnected: true,
+                            wasRequested: true
+                        });
+                    }
+
+                    video.addEventListener('volumechange', () => {
+                        if (isEnforcingVolume) return;
+                        if (window.__optitubeIsSettingVolume) return;
+                        enforceVolumeNow();
+                    });
+
+                    video.addEventListener('loadedmetadata', () => enforceVolumeNow());
+                    video.addEventListener('loadeddata', () => enforceVolumeNow());
+                    video.addEventListener('canplay', () => enforceVolumeNow());
+                    enforceVolumeNow();
+
+                    let burstCount = 0;
+                    const burstInterval = setInterval(() => {
+                        enforceVolumeNow();
+                        if (++burstCount >= 15) clearInterval(burstInterval);
+                    }, 200);
+
+                    bridge.postMessage({ type: 'VIDEO_DETECTED' });
+
+                    if (!video.paused) {
+                        startPolling();
+                    }
+                }
+                attachVideoListeners();
+
+                const videoObserver = new MutationObserver(() => {
+                    const video = document.querySelector('video');
+                    if (video && !video.__optitubeListenersAttached) {
+                        attachVideoListeners();
+                    }
+                });
+                videoObserver.observe(document.body, { childList: true, subtree: true });
+            }
+
+            function currentPlayerData() {
+                const player = document.querySelector('ytmusic-player');
+                if (player && player.playerApi && typeof player.playerApi.getVideoData === 'function') {
+                    const data = player.playerApi.getVideoData();
+                    if (data && typeof data === 'object') return data;
+                }
+
+                const moviePlayer = document.getElementById('movie_player');
+                if (moviePlayer && typeof moviePlayer.getVideoData === 'function') {
+                    const data = moviePlayer.getVideoData();
+                    if (data && typeof data === 'object') return data;
+                }
+
+                return null;
+            }
+
+            function currentVideoId() {
+                const playerData = currentPlayerData();
+                if (playerData) {
+                    const playerVideoId = playerData.video_id || playerData.videoId || '';
+                    if (playerVideoId) return playerVideoId;
+                }
+
+                try {
+                    const url = new URL(window.location.href);
+                    return url.searchParams.get('v') || '';
+                } catch (e) {
+                    return '';
+                }
+            }
+
+            let lyricsPollId = null;
+            window.startLyricsPoll = function() {
+                if (lyricsPollId) return;
+                lyricsPollId = setInterval(() => {
+                    const v = document.querySelector('video');
+                    if (v) {
+                        bridge.postMessage({
+                            type: 'LYRICS_TIME',
+                            time: v.currentTime
+                        });
+                    }
+                }, 100);
+            };
+
+            window.stopLyricsPoll = function() {
+                if (lyricsPollId) {
+                    clearInterval(lyricsPollId);
+                    lyricsPollId = null;
+                }
+            };
+
+            function startPolling() {
+                if (isPollingActive) return;
+                isPollingActive = true;
+                sendUpdate();
+                pollIntervalId = setInterval(sendUpdate, POLL_INTERVAL_MS);
+            }
+
+            function stopPolling() {
+                isPollingActive = false;
+                if (pollIntervalId) {
+                    clearInterval(pollIntervalId);
+                    pollIntervalId = null;
+                }
+                sendUpdate();
+            }
+
+            function setupObserver(playerBar) {
+                let mutationTimeout = null;
+                const observer = new MutationObserver(() => {
+                    if (mutationTimeout) return;
+                    mutationTimeout = setTimeout(() => {
+                        mutationTimeout = null;
+                        sendUpdate();
+                    }, 100);
+                });
+                observer.observe(playerBar, {
+                    attributes: true, characterData: true,
+                    childList: true, subtree: true,
+                    attributeFilter: ['title', 'aria-label', 'like-status', 'value', 'aria-valuemax']
+                });
+                sendUpdate();
+            }
+
+            function sendTrackEnded() {
+                const endedVideoId = lastVideoId || currentVideoId();
+                bridge.postMessage({
+                    type: 'TRACK_ENDED',
+                    videoId: endedVideoId
+                });
+            }
+
+            function sendUpdate() {
+                const now = Date.now();
+                if (now - lastUpdateTime < UPDATE_THROTTLE_MS && isPollingActive) {
+                    return;
+                }
+                lastUpdateTime = now;
+
+                try {
+                    const video = document.querySelector('video');
+                    const isPlaying = video ? !video.paused : false;
+                    const progressBar = document.querySelector('#progress-bar');
+
+                    const titleEl = document.querySelector('.ytmusic-player-bar.title');
+                    const artistEl = document.querySelector('.ytmusic-player-bar.byline');
+                    const thumbEl = document.querySelector('.ytmusic-player-bar .thumbnail img, ytmusic-player-bar .image');
+
+                    const playerData = currentPlayerData();
+                    const playerTitle = playerData && typeof playerData.title === 'string'
+                        ? playerData.title.trim()
+                        : '';
+                    const playerArtist = playerData && typeof playerData.author === 'string'
+                        ? playerData.author.trim()
+                        : '';
+
+                    let title = titleEl ? titleEl.textContent.trim() : '';
+                    let artist = artistEl ? artistEl.textContent.trim() : '';
+                    const videoId = currentVideoId();
+                    let thumbnailUrl = '';
+
+                    if (playerTitle && title && playerTitle !== title) {
+                        title = playerTitle;
+                        if (playerArtist) artist = playerArtist;
+                    } else {
+                        if (!title && playerTitle) title = playerTitle;
+                        if (!artist && playerArtist) artist = playerArtist;
+                    }
+
+                    if (thumbEl) {
+                        thumbnailUrl = thumbEl.src || thumbEl.getAttribute('src') || '';
+                    }
+
+                    let likeStatus = 'INDIFFERENT';
+                    const likeRenderer = document.querySelector('ytmusic-like-button-renderer');
+                    if (likeRenderer) {
+                        const status = likeRenderer.getAttribute('like-status');
+                        if (status === 'LIKE') likeStatus = 'LIKE';
+                        else if (status === 'DISLIKE') likeStatus = 'DISLIKE';
+                    }
+
+                    const metadataChanged = title !== '' && (title !== lastTitle || artist !== lastArtist);
+                    const videoIdChanged = videoId !== '' && videoId !== lastVideoId;
+                    const trackChanged = metadataChanged || videoIdChanged;
+
+                    if (trackChanged) {
+                        if (title !== '') {
+                            lastTitle = title;
+                            lastArtist = artist;
+                        }
+                        if (videoId !== '') {
+                            lastVideoId = videoId;
+                        }
+                    }
+
+                    let hasVideo = false;
+                    const toggleButtons = document.querySelectorAll('tp-yt-paper-button, button, [role="button"]');
+                    for (const btn of toggleButtons) {
+                        const text = (btn.textContent || btn.innerText || '').trim().toLowerCase();
+                        if (text === 'video' || text === 'track') {
+                            hasVideo = true;
+                            break;
+                        }
+                    }
+
+                    bridge.postMessage({
+                        type: 'STATE_UPDATE',
+                        isPlaying: isPlaying,
+                        progress: progressBar ? parseInt(progressBar.getAttribute('value') || '0') : 0,
+                        duration: progressBar ? parseInt(progressBar.getAttribute('aria-valuemax') || '0') : 0,
+                        title: title,
+                        artist: artist,
+                        videoId: videoId,
+                        thumbnailUrl: thumbnailUrl,
+                        trackChanged: trackChanged,
+                        likeStatus: likeStatus,
+                        hasVideo: hasVideo
+                    });
+                } catch (e) {}
+            }
+
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', waitForPlayerBar);
+            } else {
+                waitForPlayerBar();
+            }
+        })();
+        """
+    }
+}

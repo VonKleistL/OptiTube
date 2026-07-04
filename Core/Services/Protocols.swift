@@ -1,0 +1,420 @@
+import Foundation
+
+// MARK: - WebKitManagerProtocol
+
+/// Protocol defining the interface for WebKit cookie and data management.
+/// Enables dependency injection and mocking for tests.
+@MainActor
+protocol WebKitManagerProtocol: AnyObject, Sendable {
+    /// Retrieves all cookies from the HTTP cookie store.
+    func getAllCookies() async -> [HTTPCookie]
+
+    /// Gets cookies for a specific domain.
+    func getCookies(for domain: String) async -> [HTTPCookie]
+
+    /// Builds a Cookie header string for the given domain.
+    func cookieHeader(for domain: String) async -> String?
+
+    /// Retrieves the SAPISID cookie value used for authentication.
+    func getSAPISID() async -> String?
+
+    /// Checks if the required authentication cookies exist.
+    func hasAuthCookies() async -> Bool
+
+    /// Clears all website data (cookies, cache, etc.).
+    func clearAllData() async
+
+    /// Forces an immediate backup of all YouTube/Google cookies.
+    func forceBackupCookies() async
+
+    /// Logs all authentication-related cookies for debugging.
+    func logAuthCookies() async
+
+    /// Waits for the one-time startup cookie restoration task to complete.
+    func waitForInitialCookieRestore() async
+
+    /// Switches the shared cookie session's active delegated identity by
+    /// navigating a transient WebView to a server-issued account-switch URL.
+    func switchSessionIdentity(to signinURL: URL, expectedBrandId: String?) async throws
+}
+
+// MARK: - YTMusicClientProtocol
+
+/// Protocol defining the interface for YouTube Music API operations.
+/// Enables dependency injection and mocking for tests.
+@MainActor
+protocol YTMusicClientProtocol: Sendable {
+    /// Fetches the home page content (initial sections only for fast display).
+    func getHome(forceRefresh: Bool) async throws -> HomeResponse
+
+    /// Fetches the next batch of home sections via continuation.
+    func getHomeContinuation() async throws -> [HomeSection]?
+
+    /// Whether more home sections are available to load.
+    var hasMoreHomeSections: Bool { get }
+
+    /// Fetches the explore page content (initial sections only for fast display).
+    func getExplore() async throws -> HomeResponse
+
+    /// Fetches the next batch of explore sections via continuation.
+    func getExploreContinuation() async throws -> [HomeSection]?
+
+    /// Whether more explore sections are available to load.
+    var hasMoreExploreSections: Bool { get }
+
+    /// Fetches the charts page content (initial sections only for fast display).
+    func getCharts() async throws -> HomeResponse
+
+    /// Fetches the next batch of charts sections via continuation.
+    func getChartsContinuation() async throws -> [HomeSection]?
+
+    /// Whether more charts sections are available to load.
+    var hasMoreChartsSections: Bool { get }
+
+    /// Fetches the moods and genres page content (initial sections only for fast display).
+    func getMoodsAndGenres() async throws -> HomeResponse
+
+    /// Fetches the next batch of moods and genres sections via continuation.
+    func getMoodsAndGenresContinuation() async throws -> [HomeSection]?
+
+    /// Whether more moods and genres sections are available to load.
+    var hasMoreMoodsAndGenresSections: Bool { get }
+
+    /// Fetches the new releases page content (initial sections only for fast display).
+    func getNewReleases() async throws -> HomeResponse
+
+    /// Fetches the next batch of new releases sections via continuation.
+    func getNewReleasesContinuation() async throws -> [HomeSection]?
+
+    /// Whether more new releases sections are available to load.
+    var hasMoreNewReleasesSections: Bool { get }
+
+    /// Fetches the podcasts page content (initial sections only for fast display).
+    func getPodcasts() async throws -> [PodcastSection]
+
+    /// Fetches the next batch of podcasts sections via continuation.
+    func getPodcastsContinuation() async throws -> [PodcastSection]?
+
+    /// Whether more podcasts sections are available to load.
+    var hasMorePodcastsSections: Bool { get }
+
+    /// Fetches details for a podcast show including its episodes.
+    func getPodcastShow(browseId: String) async throws -> PodcastShowDetail
+
+    /// Fetches more episodes for a podcast show via continuation.
+    func getPodcastEpisodesContinuation(token: String) async throws -> PodcastEpisodesContinuation
+
+    /// Searches for content.
+    func search(query: String) async throws -> SearchResponse
+
+    /// Searches for tracks only (filtered search, excludes videos/podcasts/episodes).
+    func searchTracks(query: String) async throws -> [Track]
+
+    /// Searches for tracks only with pagination support.
+    func searchTracksWithPagination(query: String) async throws -> SearchResponse
+
+    /// Searches for videos only with pagination support.
+    func searchVideosWithPagination(query: String) async throws -> SearchResponse
+
+    /// Searches for albums only (filtered search with pagination).
+    func searchAlbums(query: String) async throws -> SearchResponse
+
+    /// Searches for artists only (filtered search with pagination).
+    func searchArtists(query: String) async throws -> SearchResponse
+
+    /// Searches for playlists only (filtered search with pagination).
+    func searchPlaylists(query: String) async throws -> SearchResponse
+
+    /// Searches for featured playlists only (YouTube Music curated playlists).
+    func searchFeaturedPlaylists(query: String) async throws -> SearchResponse
+
+    /// Searches for community playlists only (user-created playlists).
+    func searchCommunityPlaylists(query: String) async throws -> SearchResponse
+
+    /// Searches for podcasts only (podcast shows).
+    func searchPodcasts(query: String) async throws -> SearchResponse
+
+    /// Fetches the next batch of search results via continuation.
+    /// Returns nil if no more results are available.
+    func getSearchContinuation() async throws -> SearchResponse?
+
+    /// Whether more search results are available to load.
+    var hasMoreSearchResults: Bool { get }
+
+    /// Clears the search continuation token.
+    func clearSearchContinuation()
+
+    /// Clears cached continuation/session state when switching accounts.
+    func resetSessionStateForAccountSwitch()
+
+    /// Fetches search suggestions for autocomplete.
+    func getSearchSuggestions(query: String) async throws -> [SearchSuggestion]
+
+    /// Fetches the user's library playlists.
+    func getLibraryPlaylists() async throws -> [Playlist]
+
+    /// Fetches the user's library content including playlists and podcast shows.
+    func getLibraryContent() async throws -> PlaylistParser.LibraryContent
+
+    /// Fetches the user's liked tracks with pagination support.
+    func getLikedTracks() async throws -> LikedTracksResponse
+
+    /// Fetches the next batch of liked tracks via continuation.
+    /// Returns nil if no more tracks are available.
+    func getLikedTracksContinuation() async throws -> LikedTracksResponse?
+
+    /// Whether more liked tracks are available to load.
+    var hasMoreLikedTracks: Bool { get }
+
+    /// Fetches playlist details including tracks with pagination support.
+    func getPlaylist(id: String) async throws -> PlaylistTracksResponse
+
+    /// Fetches all tracks for a playlist using the queue endpoint (no pagination needed).
+    /// This returns all tracks in a single request, which is more reliable for radio playlists.
+    func getPlaylistAllTracks(playlistId: String) async throws -> [Track]
+
+    /// Fetches the next batch of playlist tracks via continuation.
+    /// Returns nil if no more tracks are available.
+    func getPlaylistContinuation() async throws -> PlaylistContinuationResponse?
+
+    /// Whether more playlist tracks are available to load.
+    var hasMorePlaylistTracks: Bool { get }
+
+    /// Fetches artist details including their tracks and albums.
+    func getArtist(id: String) async throws -> ArtistDetail
+
+    /// Fetches all tracks for an artist using the tracks browse endpoint.
+    func getArtistTracks(browseId: String, params: String?) async throws -> [Track]
+
+    /// Rates a track (like/dislike/indifferent).
+    func rateTrack(videoId: String, rating: LikeStatus) async throws
+
+    /// Adds or removes a track from the user's library.
+    func editTrackLibraryStatus(feedbackTokens: [String]) async throws
+
+    /// Adds a playlist to the user's library.
+    func subscribeToPlaylist(playlistId: String) async throws
+
+    /// Removes a playlist from the user's library.
+    func unsubscribeFromPlaylist(playlistId: String) async throws
+
+    /// Subscribes to a podcast show (adds to library).
+    func subscribeToPodcast(showId: String) async throws
+
+    /// Unsubscribes from a podcast show (removes from library).
+    func unsubscribeFromPodcast(showId: String) async throws
+
+    /// Subscribes to an artist (adds to library).
+    func subscribeToArtist(channelId: String) async throws
+
+    /// Unsubscribes from an artist (removes from library).
+    func unsubscribeFromArtist(channelId: String) async throws
+
+    /// Fetches lyrics for a track.
+    func getLyrics(videoId: String) async throws -> Lyrics
+
+    /// Fetches track metadata by video ID.
+    func getTrack(videoId: String) async throws -> Track
+
+    /// Fetches a radio queue (similar tracks) based on a video ID.
+    /// Returns an array of tracks that form a "radio" playlist based on the seed track.
+    func getRadioQueue(videoId: String) async throws -> [Track]
+
+    /// Fetches a mix queue from a playlist ID (e.g., artist mix "RDEM...").
+    /// - Parameters:
+    ///   - playlistId: The mix playlist ID (e.g., "RDEM..." for artist mix)
+    ///   - startVideoId: Optional starting video ID
+    /// - Returns: RadioQueueResult with tracks and continuation token for infinite mix
+    func getMixQueue(playlistId: String, startVideoId: String?) async throws -> RadioQueueResult
+
+    /// Fetches more tracks for a mix queue using a continuation token.
+    /// - Parameter continuationToken: The continuation token from a previous getMixQueue call
+    /// - Returns: RadioQueueResult with additional tracks and next continuation token
+    func getMixQueueContinuation(continuationToken: String) async throws -> RadioQueueResult
+
+    /// Fetches content for a moods/genres category page.
+    /// Returns sections of tracks/playlists for the category.
+    func getMoodCategory(browseId: String, params: String?) async throws -> HomeResponse
+
+    /// Fetches the list of available accounts (primary + brand accounts).
+    /// Used for account switching functionality.
+    func fetchAccountsList() async throws -> AccountsListResponse
+
+    /// Switches the active account identity.
+    /// - Parameter brandId: The brand ID to switch to, or nil for the primary account.
+    func switchAccount(brandId: String?) async throws
+}
+
+// MARK: - AuthServiceProtocol
+
+/// Protocol defining the interface for authentication operations.
+/// Enables dependency injection and mocking for tests.
+@MainActor
+protocol AuthServiceProtocol: AnyObject, Sendable {
+    /// Current authentication state.
+    var state: AuthService.State { get }
+
+    /// Flag indicating whether re-authentication is needed.
+    var needsReauth: Bool { get set }
+
+    /// Starts the login flow by presenting the login sheet.
+    func startLogin()
+
+    /// Checks if the user is logged in based on existing cookies.
+    func checkLoginStatus() async
+
+    /// Called when a session expires (e.g., 401/403 from API).
+    func sessionExpired()
+
+    /// Signs out the user by clearing all cookies and data.
+    func signOut() async
+
+    /// Called when login completes successfully.
+    @discardableResult
+    func completeLogin(sapisid: String) -> Bool
+}
+
+// MARK: - PlaybackStoreProtocol
+
+/// Protocol defining the interface for playback control.
+/// Enables dependency injection and mocking for tests.
+@MainActor
+protocol PlaybackStoreProtocol: AnyObject, Sendable {
+    /// Current playback state.
+    var state: PlaybackStore.PlaybackState { get }
+
+    /// Callback invoked when playback is about to start.
+    var playbackWillStart: (() -> Void)? { get set }
+
+    /// Currently playing track.
+    var currentTrack: Track? { get }
+
+    /// Whether playback is active.
+    var isPlaying: Bool { get }
+
+    /// Current playback position in seconds.
+    var progress: TimeInterval { get }
+
+    /// Total duration of current track in seconds.
+    var duration: TimeInterval { get }
+
+    /// Current volume (0.0 - 1.0).
+    var volume: Double { get }
+
+    /// Whether audio is currently muted.
+    var isMuted: Bool { get }
+
+    /// Whether shuffle mode is enabled.
+    var shuffleEnabled: Bool { get }
+
+    /// Current repeat mode.
+    var repeatMode: PlaybackStore.RepeatMode { get }
+
+    /// Playback queue.
+    var queue: [Track] { get }
+
+    /// Index of current track in queue.
+    var currentIndex: Int { get }
+
+    /// Whether the mini player should be shown.
+    var showMiniPlayer: Bool { get set }
+
+    /// Like status of the current track.
+    var currentTrackLikeStatus: LikeStatus { get }
+
+    /// Whether the current track is in the user's library.
+    var currentTrackInLibrary: Bool { get }
+
+    // MARK: - Playback Control
+
+    /// Plays a track by video ID.
+    func play(videoId: String) async
+
+    /// Plays a track.
+    func play(track: Track) async
+
+    /// Toggles play/pause.
+    func playPause() async
+
+    /// Pauses playback.
+    func pause() async
+
+    /// Resumes playback.
+    func resume() async
+
+    /// Skips to next track.
+    func next() async
+
+    /// Goes to previous track.
+    func previous() async
+
+    /// Seeks to a specific time.
+    func seek(to time: TimeInterval) async
+
+    /// Sets the volume.
+    func setVolume(_ value: Double) async
+
+    /// Toggles mute state.
+    func toggleMute() async
+
+    /// Toggles shuffle mode.
+    func toggleShuffle()
+
+    /// Cycles through repeat modes.
+    func cycleRepeatMode()
+
+    /// Stops playback and clears state.
+    func stop() async
+
+    /// Plays a queue of tracks starting at the specified index.
+    func playQueue(_ tracks: [Track], startingAt index: Int) async
+
+    /// Plays a track and fetches similar tracks (radio queue) in the background.
+    /// The queue will be populated with similar tracks from YouTube Music's radio feature.
+    func playWithRadio(track: Track) async
+
+    /// Plays an artist mix from a mix playlist ID.
+    /// Starts playing immediately and fetches the full mix queue in the background.
+    /// - Parameters:
+    ///   - playlistId: The mix playlist ID (e.g., "RDEM...")
+    ///   - startVideoId: Optional starting video ID
+    func playWithMix(playlistId: String, startVideoId: String?) async
+
+    /// Persists queue/session metadata for restoration on next launch.
+    func saveQueueForPersistence()
+
+    /// Restores queue/session metadata from persistence.
+    @discardableResult
+    func restoreQueueFromPersistence() -> Bool
+
+    /// Clears persisted queue/session metadata.
+    func clearSavedQueue()
+
+    // MARK: - Like/Library Actions
+
+    /// Likes the current track.
+    func likeCurrentTrack()
+
+    /// Dislikes the current track.
+    func dislikeCurrentTrack()
+
+    /// Toggles the library status of the current track.
+    func toggleLibraryStatus()
+
+    // MARK: - State Updates
+
+    /// Called when the mini player confirms playback has started.
+    func confirmPlaybackStarted()
+
+    /// Called when the mini player is dismissed.
+    func miniPlayerDismissed()
+
+    /// Updates playback state from the WebView observer.
+    func updatePlaybackState(isPlaying: Bool, progress: Double, duration: Double)
+
+    /// Updates track metadata when track changes.
+    func updateTrackMetadata(title: String, artist: String, thumbnailUrl: String, videoId: String?)
+
+    /// Updates the like status from WebView observation.
+    func updateLikeStatus(_ status: LikeStatus)
+}
