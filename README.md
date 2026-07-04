@@ -4,7 +4,6 @@ A native macOS suite for YouTube Music, YouTube, and YouTube Studio — built wi
 
 One window, three experiences. Flip between Music, YouTube, and Studio with a single toggle, wrapped in a translucent glass interface that feels at home on modern macOS.
 
-https://github.com/VonKleistL/OptiTube/raw/main/docs/media/MUSIC.webm
 
 <p align="center">
   <img src="docs/media/SEARCH.png" alt="Search" width="32%" />
