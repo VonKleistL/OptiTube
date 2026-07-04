@@ -1,0 +1,409 @@
+name: Release Build
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Optional tag/label used for naming the release asset"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release:
+    runs-on: macos-26
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v4
+        with:
+          fetch-depth: 0  # Full history for changelog generation
+
+      - name: Configure git user
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Select Xcode version
+        run: sudo xcode-select -s /Applications/Xcode_26.2.app/Contents/Developer
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Run unit tests
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project OptiTube.xcodeproj \
+            -scheme OptiTube \
+            -destination 'platform=macOS' \
+            -derivedDataPath ./build \
+            -only-testing:OptiTubeTests \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            test
+
+      - name: Determine version from tag
+        id: version
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            TAG="${{ inputs.tag }}"
+          elif [ -n "${{ github.ref_name }}" ]; then
+            TAG="${{ github.ref_name }}"
+          else
+            TAG="0.0.0"
+          fi
+          VERSION="${TAG#v}"  # Remove 'v' prefix if present
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Using version: $VERSION"
+
+      - name: Build release configuration
+        run: |
+          xcodebuild -project OptiTube.xcodeproj \
+            -scheme OptiTube \
+            -configuration Release \
+            -destination 'platform=macOS' \
+            -derivedDataPath ./build \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            ARCHS="arm64 x86_64" \
+            ONLY_ACTIVE_ARCH=NO \
+            MARKETING_VERSION="${{ steps.version.outputs.version }}" \
+            CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
+            build
+
+      - name: Install create-dmg
+        run: brew install create-dmg
+
+      - name: Create DMG
+        run: |
+          APP_NAME="OptiTube.app"
+          BUILD_DIR="./build/Build/Products/Release"
+
+          # debug: show what's in the build folder
+          echo "Contents of $BUILD_DIR:"
+          ls -la "$BUILD_DIR" || true
+
+          # clean previous artifact
+          rm -f optitube.dmg || true
+
+          # find the main app explicitly by name to avoid Sparkle Updater.app
+          APP_PATH=$(find "$BUILD_DIR" -type d -name "$APP_NAME" | head -n 1)
+
+          if [ -z "$APP_PATH" ]; then
+            echo "Error: Could not find $APP_NAME in $BUILD_DIR"
+            exit 1
+          fi
+
+          echo "Found app at: $APP_PATH"
+
+          # Verify app version matches expected version
+          PLIST_VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$APP_PATH/Contents/Info.plist")
+          EXPECTED_VERSION="${{ steps.version.outputs.version }}"
+          echo "Built app version: $PLIST_VERSION"
+          echo "Expected version: $EXPECTED_VERSION"
+          if [ "$PLIST_VERSION" != "$EXPECTED_VERSION" ]; then
+            echo "Error: Version mismatch!"
+            exit 1
+          fi
+
+          # Verify Universal Binary (Intel + Apple Silicon)
+          if [ -f "$APP_PATH/Contents/MacOS/OptiTube" ]; then
+            ARCHS=$(lipo -archs "$APP_PATH/Contents/MacOS/OptiTube" 2>/dev/null || echo "unknown")
+          else
+            ARCHS="unknown"
+          fi
+          echo "Architectures: $ARCHS"
+          if [[ "$ARCHS" != *"x86_64"* ]] || [[ "$ARCHS" != *"arm64"* ]]; then
+            echo "Error: App is not a Universal Binary (found: $ARCHS)"
+            exit 1
+          fi
+
+          # Create styled DMG with Applications symlink
+          create-dmg \
+            --volname "OptiTube" \
+            --window-pos 200 120 \
+            --window-size 660 400 \
+            --icon-size 100 \
+            --icon "OptiTube.app" 180 190 \
+            --app-drop-link 480 190 \
+            --hide-extension "OptiTube.app" \
+            --no-internet-enable \
+            optitube.dmg \
+            "$APP_PATH"
+
+      - name: Determine artifact name
+        id: artifact
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            TAG="${{ inputs.tag }}"
+          elif [ -n "${{ github.ref_name }}" ]; then
+            TAG="${{ github.ref_name }}"
+          else
+            TAG="v${{ steps.version.outputs.version }}"
+          fi
+
+          if [ -z "$TAG" ]; then
+            TAG="release"
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "filename=optitube-$TAG.dmg" >> "$GITHUB_OUTPUT"
+
+      - name: Rename DMG
+        run: mv optitube.dmg "${{ steps.artifact.outputs.filename }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v4
+        with:
+          name: ${{ steps.artifact.outputs.filename }}
+          path: ${{ steps.artifact.outputs.filename }}
+          retention-days: 30
+
+      - name: Calculate SHA256
+        id: sha256
+        run: |
+          SHA256=$(shasum -a 256 "${{ steps.artifact.outputs.filename }}" | awk '{print $1}')
+          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
+
+      - name: Sign DMG for Sparkle
+        id: sparkle_sign
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          if [ -z "$SPARKLE_PRIVATE_KEY" ]; then
+            echo "Warning: SPARKLE_PRIVATE_KEY not set, skipping Sparkle signing"
+            echo "signature=" >> "$GITHUB_OUTPUT"
+            echo "length=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Find Sparkle's sign_update binary
+          SIGN_UPDATE=$(find ./build -name "sign_update" -type f 2>/dev/null | head -1)
+          if [ -z "$SIGN_UPDATE" ]; then
+            echo "Warning: sign_update not found, skipping Sparkle signing"
+            echo "signature=" >> "$GITHUB_OUTPUT"
+            echo "length=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Write private key to temp file
+          echo "$SPARKLE_PRIVATE_KEY" > /tmp/sparkle_key
+          chmod 600 /tmp/sparkle_key
+
+          # Sign the DMG and capture output
+          SIGN_OUTPUT=$("$SIGN_UPDATE" --ed-key-file /tmp/sparkle_key "${{ steps.artifact.outputs.filename }}")
+          rm -f /tmp/sparkle_key
+
+          # Parse signature and length from output
+          # Output format: sparkle:edSignature="..." length="..."
+          SIGNATURE=$(echo "$SIGN_OUTPUT" | grep -o 'sparkle:edSignature="[^"]*"' | sed 's/sparkle:edSignature="//;s/"$//')
+          LENGTH=$(stat -f%z "${{ steps.artifact.outputs.filename }}")
+
+          echo "signature=$SIGNATURE" >> "$GITHUB_OUTPUT"
+          echo "length=$LENGTH" >> "$GITHUB_OUTPUT"
+          echo "Sparkle signature generated successfully"
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          TAG="${{ steps.artifact.outputs.tag }}"
+          VERSION="${{ steps.version.outputs.version }}"
+          SHA256="${{ steps.sha256.outputs.sha256 }}"
+
+          # Get previous tag for changelog
+          # List all version tags sorted by version, find the one before current
+          CURRENT_TAG="${{ steps.artifact.outputs.tag }}"
+          PREV_TAG=$(git tag -l 'v*' --sort=-v:refname | grep -A1 "^${CURRENT_TAG}$" | tail -1)
+          # If grep found nothing or returned the same tag, try alternative method
+          if [ "$PREV_TAG" = "$CURRENT_TAG" ] || [ -z "$PREV_TAG" ]; then
+            PREV_TAG=$(git describe --tags --abbrev=0 "${CURRENT_TAG}^" 2>/dev/null || echo "")
+          fi
+
+          # Generate changelog
+          if [ -n "$PREV_TAG" ] && [ "$PREV_TAG" != "$CURRENT_TAG" ]; then
+            CHANGELOG=$(git log --pretty=format:"- %s" "$PREV_TAG".."$CURRENT_TAG" --no-merges | head -50)
+          else
+            CHANGELOG="- Initial release"
+          fi
+
+          # Create release notes
+          NOTES=$(cat <<EOF
+          ## What's New
+
+          ${CHANGELOG}
+
+          ## Installation
+
+          ### Homebrew (recommended)
+          \`\`\`bash
+          brew install VonKleistL/repo/optitube
+          \`\`\`
+
+          ### Manual Download
+          1. Download \`${{ steps.artifact.outputs.filename }}\`
+          2. Open the DMG and drag OptiTube to Applications
+          3. Remove the quarantine attribute (required for unsigned apps):
+             \`\`\`bash
+             xattr -d com.apple.quarantine /Applications/OptiTube.app
+             \`\`\`
+
+          ## Verification
+
+          **SHA256:** \`${SHA256}\`
+
+          Verify with: \`shasum -a 256 ${{ steps.artifact.outputs.filename }}\`
+          EOF
+          )
+
+          # Write to file (safer than GITHUB_OUTPUT for multiline)
+          echo "$NOTES" > release_notes.md
+
+      - name: Check if pre-release
+        id: prerelease
+        run: |
+          TAG="${{ steps.artifact.outputs.tag }}"
+          if [[ "$TAG" =~ -(alpha|beta|rc|dev) ]]; then
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub release and upload DMG
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eo pipefail
+
+          TAG="${{ steps.artifact.outputs.tag }}"
+          FILE="${{ steps.artifact.outputs.filename }}"
+          TITLE="${TAG}"
+          PRERELEASE_FLAG=""
+
+          if [ "${{ steps.prerelease.outputs.is_prerelease }}" = "true" ]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists, uploading asset instead"
+            gh release upload "$TAG" "$FILE" --clobber
+          else
+            gh release create "$TAG" "$FILE" \
+              --title "$TITLE" \
+              --notes-file release_notes.md \
+              $PRERELEASE_FLAG
+          fi
+
+      - name: Checkout Homebrew tap repo
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v4
+        with:
+          repository: VonKleistL/homebrew-repo
+          token: ${{ secrets.HOMEBREW_REPO_TOKEN }}
+          path: homebrew-repo
+          fetch-depth: 0
+
+      - name: Update Homebrew Cask
+        run: |
+          TAG="${{ steps.artifact.outputs.tag }}"
+          VERSION="${TAG#v}"
+
+          cd homebrew-repo
+
+          # Update the cask file
+          mkdir -p Casks
+          cat > Casks/optitube.rb << EOF
+          cask "optitube" do
+            version "$VERSION"
+            sha256 "${{ steps.sha256.outputs.sha256 }}"
+
+            url "https://github.com/VonKleistL/optitube/releases/download/v#{version}/optitube-v#{version}.dmg"
+            name "OptiTube"
+            desc "Native YouTube Music client"
+            homepage "https://github.com/VonKleistL/optitube"
+
+            auto_updates true
+            depends_on macos: ">= :tahoe"
+
+            app "OptiTube.app"
+
+            postflight do
+              system_command "/usr/bin/xattr", args: ["-cr", "#{appdir}/OptiTube.app"], sudo: false
+            end
+
+            zap trash: [
+              "~/Library/Application Support/OptiTube",
+              "~/Library/Caches/com.sertacozercan.OptiTube",
+              "~/Library/Preferences/com.sertacozercan.OptiTube.plist",
+              "~/Library/Saved Application State/com.sertacozercan.OptiTube.savedState",
+              "~/Library/WebKit/com.sertacozercan.OptiTube",
+            ]
+          end
+          EOF
+
+          git add Casks/optitube.rb
+          git diff --cached --quiet || git commit -m "Update optitube to ${TAG}"
+          git push origin main
+
+      - name: Update Appcast
+        run: |
+          # Fetch and checkout the default branch (we're in detached HEAD from tag checkout)
+          git fetch origin ${{ github.event.repository.default_branch }}
+          git checkout ${{ github.event.repository.default_branch }}
+
+          TAG="${{ steps.artifact.outputs.tag }}"
+          VERSION="${TAG#v}"
+
+          # Update appcast.xml for Sparkle auto-updates
+          SIGNATURE="${{ steps.sparkle_sign.outputs.signature }}"
+          LENGTH="${{ steps.sparkle_sign.outputs.length }}"
+
+          if [ -n "$SIGNATURE" ]; then
+            PUB_DATE=$(date -u "+%a, %d %b %Y %H:%M:%S %z")
+            DOWNLOAD_URL="https://github.com/${{ github.repository }}/releases/download/${TAG}/${{ steps.artifact.outputs.filename }}"
+            RELEASE_NOTES_URL="https://github.com/${{ github.repository }}/releases/tag/${TAG}"
+
+            # Create updated appcast.xml with the new item at the top
+            cat > appcast.xml << APPCAST_EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
+              <channel>
+                  <title>OptiTube Updates</title>
+                  <link>https://github.com/${{ github.repository }}/releases</link>
+                  <description>Most recent updates for OptiTube, a native macOS YouTube Music client.</description>
+                  <language>en</language>
+
+                  <item>
+                      <title>Version ${VERSION}</title>
+                      <sparkle:releaseNotesLink>${RELEASE_NOTES_URL}</sparkle:releaseNotesLink>
+                      <pubDate>${PUB_DATE}</pubDate>
+                      <enclosure
+                          url="${DOWNLOAD_URL}"
+                          sparkle:version="${{ github.run_number }}"
+                          sparkle:shortVersionString="${VERSION}"
+                          length="${LENGTH}"
+                          type="application/octet-stream"
+                          sparkle:edSignature="${SIGNATURE}"/>
+                      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+                  </item>
+
+              </channel>
+          </rss>
+          APPCAST_EOF
+
+            git add appcast.xml
+            git diff --cached --quiet || git commit -m "Update appcast to ${{ steps.artifact.outputs.tag }}"
+            git push origin ${{ github.event.repository.default_branch }}
+          fi

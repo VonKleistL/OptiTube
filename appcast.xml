@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <channel>
+        <title>OptiTube Updates</title>
+        <link>https://github.com/VonKleistL/OptiTube/releases</link>
+        <description>Most recent updates for OptiTube, a native macOS YouTube Music client.</description>
+        <language>en</language>
+
+        <item>
+            <title>Version 0.6.0</title>
+            <sparkle:releaseNotesLink>https://github.com/VonKleistL/OptiTube/releases/tag/v0.6.0</sparkle:releaseNotesLink>
+            <pubDate>Sat, 24 Jan 2026 05:43:41 +0000</pubDate>
+            <enclosure
+                url="https://github.com/VonKleistL/OptiTube/releases/download/v0.6.0/optitube-v0.6.0.dmg"
+                sparkle:version="11"
+                sparkle:shortVersionString="0.6.0"
+                length="8126054"
+                type="application/octet-stream"
+                sparkle:edSignature="/gvIODgMYnFycRiXQfPC0CqX7kgLNh8HxdKvL+dom5hbAqpjeVpCFlbVYONzeJtTcMvUAV5rFVtgvXzMSl17Aw=="/>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+        </item>
+
+    </channel>
+</rss>

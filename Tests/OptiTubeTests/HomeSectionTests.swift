@@ -1,0 +1,393 @@
+import Foundation
+import Testing
+@testable import OptiTube
+
+/// Tests for HomeSection and HomeSectionItem.
+@Suite("HomeSection", .tags(.model))
+struct HomeSectionTests {
+    // MARK: - HomeSectionItem ID Tests
+
+    @Test("Track item ID has correct prefix")
+    func trackItemId() {
+        let track = Track(
+            id: "video123",
+            title: "Test Track",
+            artists: [],
+            album: nil,
+            duration: nil,
+            thumbnailURL: nil,
+            videoId: "video123"
+        )
+
+        let item = HomeSectionItem.track(track)
+        #expect(item.id == "track-video123")
+    }
+
+    @Test("Album item ID has correct prefix")
+    func albumItemId() {
+        let album = Album(
+            id: "album456",
+            title: "Test Album",
+            artists: nil,
+            thumbnailURL: nil,
+            year: nil,
+            trackCount: nil
+        )
+
+        let item = HomeSectionItem.album(album)
+        #expect(item.id == "album-album456")
+    }
+
+    @Test("Playlist item ID has correct prefix")
+    func playlistItemId() {
+        let playlist = Playlist(
+            id: "playlist789",
+            title: "Test Playlist",
+            description: nil,
+            thumbnailURL: nil,
+            trackCount: nil,
+            author: nil
+        )
+
+        let item = HomeSectionItem.playlist(playlist)
+        #expect(item.id == "playlist-playlist789")
+    }
+
+    @Test("Artist item ID has correct prefix")
+    func artistItemId() {
+        let artist = Artist(id: "artist111", name: "Test Artist")
+
+        let item = HomeSectionItem.artist(artist)
+        #expect(item.id == "artist-artist111")
+    }
+
+    // MARK: - HomeSectionItem Title Tests
+
+    @Test("Track item returns track title")
+    func trackItemTitle() {
+        let track = Track(
+            id: "1",
+            title: "Amazing Track",
+            artists: [],
+            album: nil,
+            duration: nil,
+            thumbnailURL: nil,
+            videoId: "1"
+        )
+
+        let item = HomeSectionItem.track(track)
+        #expect(item.title == "Amazing Track")
+    }
+
+    @Test("Album item returns album title")
+    func albumItemTitle() {
+        let album = Album(
+            id: "1",
+            title: "Great Album",
+            artists: nil,
+            thumbnailURL: nil,
+            year: nil,
+            trackCount: nil
+        )
+
+        let item = HomeSectionItem.album(album)
+        #expect(item.title == "Great Album")
+    }
+
+    @Test("Playlist item returns playlist title")
+    func playlistItemTitle() {
+        let playlist = Playlist(
+            id: "1",
+            title: "My Playlist",
+            description: nil,
+            thumbnailURL: nil,
+            trackCount: nil,
+            author: nil
+        )
+
+        let item = HomeSectionItem.playlist(playlist)
+        #expect(item.title == "My Playlist")
+    }
+
+    @Test("Artist item returns artist name")
+    func artistItemTitle() {
+        let artist = Artist(id: "1", name: "Famous Artist")
+
+        let item = HomeSectionItem.artist(artist)
+        #expect(item.title == "Famous Artist")
+    }
+
+    // MARK: - HomeSectionItem Subtitle Tests
+
+    @Test("Track item subtitle shows artists")
+    func trackItemSubtitle() {
+        let artists = [Artist(id: "a1", name: "Artist One"), Artist(id: "a2", name: "Artist Two")]
+        let track = Track(
+            id: "1",
+            title: "Track",
+            artists: artists,
+            album: nil,
+            duration: nil,
+            thumbnailURL: nil,
+            videoId: "1"
+        )
+
+        let item = HomeSectionItem.track(track)
+        #expect(item.subtitle == "Artist One, Artist Two")
+    }
+
+    @Test("Album item subtitle shows artists")
+    func albumItemSubtitle() {
+        let artists = [Artist(id: "a1", name: "Album Artist")]
+        let album = Album(
+            id: "1",
+            title: "Album",
+            artists: artists,
+            thumbnailURL: nil,
+            year: nil,
+            trackCount: nil
+        )
+
+        let item = HomeSectionItem.album(album)
+        #expect(item.subtitle == "Album Artist")
+    }
+
+    @Test("Playlist item subtitle shows author")
+    func playlistItemSubtitle() {
+        let playlist = Playlist(
+            id: "1",
+            title: "Playlist",
+            description: nil,
+            thumbnailURL: nil,
+            trackCount: nil,
+            author: "Playlist Author"
+        )
+
+        let item = HomeSectionItem.playlist(playlist)
+        #expect(item.subtitle == "Playlist Author")
+    }
+
+    @Test("Artist item subtitle is 'Artist'")
+    func artistItemSubtitle() {
+        let artist = Artist(id: "1", name: "Artist")
+
+        let item = HomeSectionItem.artist(artist)
+        #expect(item.subtitle == "Artist")
+    }
+
+    // MARK: - HomeSectionItem ThumbnailURL Tests
+
+    @Test("Track item returns track thumbnail")
+    func trackItemThumbnailURL() {
+        let url = URL(string: "https://example.com/track.jpg")
+        let track = Track(
+            id: "1",
+            title: "Track",
+            artists: [],
+            album: nil,
+            duration: nil,
+            thumbnailURL: url,
+            videoId: "1"
+        )
+
+        let item = HomeSectionItem.track(track)
+        #expect(item.thumbnailURL == url)
+    }
+
+    @Test("Album item returns album thumbnail")
+    func albumItemThumbnailURL() {
+        let url = URL(string: "https://example.com/album.jpg")
+        let album = Album(
+            id: "1",
+            title: "Album",
+            artists: nil,
+            thumbnailURL: url,
+            year: nil,
+            trackCount: nil
+        )
+
+        let item = HomeSectionItem.album(album)
+        #expect(item.thumbnailURL == url)
+    }
+
+    @Test("Playlist item returns playlist thumbnail")
+    func playlistItemThumbnailURL() {
+        let url = URL(string: "https://example.com/playlist.jpg")
+        let playlist = Playlist(
+            id: "1",
+            title: "Playlist",
+            description: nil,
+            thumbnailURL: url,
+            trackCount: nil,
+            author: nil
+        )
+
+        let item = HomeSectionItem.playlist(playlist)
+        #expect(item.thumbnailURL == url)
+    }
+
+    @Test("Artist item returns artist thumbnail")
+    func artistItemThumbnailURL() {
+        let url = URL(string: "https://example.com/artist.jpg")
+        let artist = Artist(id: "1", name: "Artist", thumbnailURL: url)
+
+        let item = HomeSectionItem.artist(artist)
+        #expect(item.thumbnailURL == url)
+    }
+
+    // MARK: - HomeSectionItem VideoId Tests
+
+    @Test("Track item returns videoId")
+    func trackItemVideoId() {
+        let track = Track(
+            id: "1",
+            title: "Track",
+            artists: [],
+            album: nil,
+            duration: nil,
+            thumbnailURL: nil,
+            videoId: "playable_video"
+        )
+
+        let item = HomeSectionItem.track(track)
+        #expect(item.videoId == "playable_video")
+    }
+
+    @Test("Album item has no videoId")
+    func albumItemVideoId() {
+        let album = Album(id: "1", title: "Album", artists: nil, thumbnailURL: nil, year: nil, trackCount: nil)
+        let item = HomeSectionItem.album(album)
+        #expect(item.videoId == nil)
+    }
+
+    @Test("Playlist item has no videoId")
+    func playlistItemVideoId() {
+        let playlist = Playlist(id: "1", title: "Playlist", description: nil, thumbnailURL: nil, trackCount: nil, author: nil)
+        let item = HomeSectionItem.playlist(playlist)
+        #expect(item.videoId == nil)
+    }
+
+    @Test("Artist item has no videoId")
+    func artistItemVideoId() {
+        let artist = Artist(id: "1", name: "Artist")
+        let item = HomeSectionItem.artist(artist)
+        #expect(item.videoId == nil)
+    }
+
+    // MARK: - HomeSectionItem BrowseId Tests
+
+    @Test("Track item has no browseId")
+    func trackItemBrowseId() {
+        let track = Track(id: "1", title: "Track", artists: [], album: nil, duration: nil, thumbnailURL: nil, videoId: "1")
+        let item = HomeSectionItem.track(track)
+        #expect(item.browseId == nil)
+    }
+
+    @Test("Album item returns album ID as browseId")
+    func albumItemBrowseId() {
+        let album = Album(id: "album123", title: "Album", artists: nil, thumbnailURL: nil, year: nil, trackCount: nil)
+        let item = HomeSectionItem.album(album)
+        #expect(item.browseId == "album123")
+    }
+
+    @Test("Playlist item returns playlist ID as browseId")
+    func playlistItemBrowseId() {
+        let playlist = Playlist(id: "playlist456", title: "Playlist", description: nil, thumbnailURL: nil, trackCount: nil, author: nil)
+        let item = HomeSectionItem.playlist(playlist)
+        #expect(item.browseId == "playlist456")
+    }
+
+    @Test("Artist item returns artist ID as browseId")
+    func artistItemBrowseId() {
+        let artist = Artist(id: "artist789", name: "Artist")
+        let item = HomeSectionItem.artist(artist)
+        #expect(item.browseId == "artist789")
+    }
+
+    // MARK: - HomeSectionItem Extraction Tests
+
+    @Test("Playlist item extracts playlist")
+    func playlistItemExtraction() {
+        let playlist = Playlist(id: "PL1", title: "My Playlist", description: nil, thumbnailURL: nil, trackCount: 10, author: "Me")
+        let item = HomeSectionItem.playlist(playlist)
+
+        #expect(item.playlist != nil)
+        #expect(item.playlist?.id == "PL1")
+        #expect(item.playlist?.title == "My Playlist")
+    }
+
+    @Test("Album item extracts album")
+    func albumItemExtraction() {
+        let album = Album(id: "AL1", title: "My Album", artists: nil, thumbnailURL: nil, year: "2024", trackCount: nil)
+        let item = HomeSectionItem.album(album)
+
+        #expect(item.album != nil)
+        #expect(item.album?.id == "AL1")
+        #expect(item.album?.title == "My Album")
+    }
+
+    @Test("Non-playlist item returns nil for playlist")
+    func nonPlaylistItemPlaylistExtraction() {
+        let track = Track(id: "1", title: "Track", artists: [], album: nil, duration: nil, thumbnailURL: nil, videoId: "1")
+        let item = HomeSectionItem.track(track)
+        #expect(item.playlist == nil)
+    }
+
+    @Test("Non-album item returns nil for album")
+    func nonAlbumItemAlbumExtraction() {
+        let artist = Artist(id: "1", name: "Artist")
+        let item = HomeSectionItem.artist(artist)
+        #expect(item.album == nil)
+    }
+
+    // MARK: - HomeSection Tests
+
+    @Test("HomeSection initializes correctly")
+    func homeSectionInit() {
+        let track = Track(id: "1", title: "Track", artists: [], album: nil, duration: nil, thumbnailURL: nil, videoId: "1")
+        let items = [HomeSectionItem.track(track)]
+
+        let section = HomeSection(id: "section1", title: "My Section", items: items)
+
+        #expect(section.id == "section1")
+        #expect(section.title == "My Section")
+        #expect(section.items.count == 1)
+        #expect(!section.isChart)
+    }
+
+    @Test("HomeSection isChart flag works")
+    func homeSectionIsChart() {
+        let section = HomeSection(id: "charts", title: "Top Charts", items: [], isChart: true)
+        #expect(section.isChart)
+    }
+
+    // MARK: - HomeResponse Tests
+
+    @Test("HomeResponse is empty with no sections")
+    func homeResponseIsEmptyWithNoSections() {
+        let response = HomeResponse(sections: [])
+        #expect(response.isEmpty)
+    }
+
+    @Test("HomeResponse is empty with empty items")
+    func homeResponseIsEmptyWithEmptyItems() {
+        let section = HomeSection(id: "1", title: "Empty Section", items: [])
+        let response = HomeResponse(sections: [section])
+        #expect(response.isEmpty)
+    }
+
+    @Test("HomeResponse is not empty with items")
+    func homeResponseNotEmpty() {
+        let track = Track(id: "1", title: "Track", artists: [], album: nil, duration: nil, thumbnailURL: nil, videoId: "1")
+        let section = HomeSection(id: "1", title: "Section", items: [.track(track)])
+        let response = HomeResponse(sections: [section])
+        #expect(!response.isEmpty)
+    }
+
+    @Test("HomeResponse.empty returns empty response")
+    func homeResponseEmptyStatic() {
+        let empty = HomeResponse.empty
+        #expect(empty.isEmpty)
+        #expect(empty.sections.isEmpty)
+    }
+}
